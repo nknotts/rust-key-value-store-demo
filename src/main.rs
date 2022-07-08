@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 use rusqlite::Connection;
-use std::{collections::HashMap, fmt, fs::File};
+use std::{collections::HashMap, fs::File};
 
 type Database = HashMap<String, String>;
 
@@ -52,28 +52,14 @@ fn main() {
 }
 
 #[derive(Debug)]
-struct KeyAlreadyExists;
-
-#[derive(Debug)]
-pub struct KeyDoesNotExist {
-    key: String,
-}
-
-#[derive(Debug)]
 enum Error {
     IO(std::io::Error),
     SerdeYaml(serde_yaml::Error),
     SerdeJson(serde_json::Error),
     Sql(rusqlite::Error),
     Csv(csv::Error),
-    KeyAlreadyExists(KeyAlreadyExists),
-    KeyDoesNotExist(KeyDoesNotExist),
-}
-
-impl fmt::Display for KeyDoesNotExist {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Key '{}' does not exist in db", self.key)
-    }
+    KeyAlreadyExists(String),
+    KeyDoesNotExist(String),
 }
 
 type Result<T> = std::result::Result<T, Error>;
@@ -108,18 +94,6 @@ impl From<csv::Error> for Error {
     }
 }
 
-impl From<KeyDoesNotExist> for Error {
-    fn from(err: KeyDoesNotExist) -> Error {
-        Error::KeyDoesNotExist(err)
-    }
-}
-
-impl From<KeyAlreadyExists> for Error {
-    fn from(err: KeyAlreadyExists) -> Error {
-        Error::KeyAlreadyExists(err)
-    }
-}
-
 fn create_serializer(fname: &str) -> Box<dyn Serializer> {
     if fname.ends_with(".yml") {
         Box::new(YamlSerializer {})
@@ -148,9 +122,7 @@ fn remove_db_key(fname: &str, key: &str, serializer: &dyn Serializer) -> Result<
     let mut db = serializer.read_from_file(fname)?;
     let res = db.remove(key);
     if res.is_none() {
-        return Err(Error::KeyDoesNotExist(KeyDoesNotExist {
-            key: key.to_string(),
-        }));
+        return Err(Error::KeyDoesNotExist(key.to_string()));
     }
     serializer.write_to_file(fname, db)?;
     println!("Successfully removed key '{}'", key);
@@ -168,7 +140,7 @@ fn add_key(fname: &str, key: String, value: String, serializer: &dyn Serializer)
     let mut db = serializer.read_from_file(fname)?;
     let res = db.insert(key.clone(), value.clone());
     if res.is_some() {
-        return Err(Error::KeyAlreadyExists(KeyAlreadyExists {}));
+        return Err(Error::KeyAlreadyExists(key.clone()));
     }
     serializer.write_to_file(fname, db)?;
     println!("Successfully added key/value {}:{}", key, value);
@@ -251,9 +223,11 @@ impl Serializer for SqliteSerializer {
         let mut db = Database::new();
         for row in kv_iter {
             let kv = row?;
-            let res = db.insert(kv.0, kv.1);
+            let key = kv.0;
+            let value = kv.1;
+            let res = db.insert(key.clone(), value);
             if res.is_some() {
-                return Err(Error::KeyAlreadyExists(KeyAlreadyExists {}));
+                return Err(Error::KeyAlreadyExists(key));
             }
         }
         Ok(db)
@@ -277,10 +251,12 @@ impl Serializer for CsvSerializer {
         let mut db = Database::new();
         for row in rdr.records() {
             let kv = row?;
+            let key = kv[0].to_string();
+            let value = kv[1].to_string();
             assert_eq!(kv.len(), 2);
-            let res = db.insert(kv[0].to_string(), kv[1].to_string());
+            let res = db.insert(key.clone(), value);
             if res.is_some() {
-                return Err(Error::KeyAlreadyExists(KeyAlreadyExists {}));
+                return Err(Error::KeyAlreadyExists(key));
             }
         }
         Ok(db)
